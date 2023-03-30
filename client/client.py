@@ -4,6 +4,7 @@ import struct
 import time
 from os.path import exists
 
+#checks if vehicle is in file
 def vehicleInFile(vehicle, fileName):
     with open(fileName) as f:
         vehicles = f.readlines()
@@ -13,6 +14,7 @@ def vehicleInFile(vehicle, fileName):
             return True
     return False
 
+#checks if date is in a file
 def dateInFile(date, fileName):
     with open(fileName) as f:
         dates = f.readlines()
@@ -26,6 +28,13 @@ def dateInFile(date, fileName):
             return True
     return False
 
+'''caches information
+args: 
+    command: current command
+    message: response to current command
+returns:
+    int representing the time of caching for refreshing reservations.txt
+'''
 def cache(command, message):
     command_args = command.split(" ")
     if command == "cars":
@@ -38,6 +47,7 @@ def cache(command, message):
     elif command == "reservations":
         with open('reservations.txt', 'w') as f:
             f.writelines(message)
+        return time.time()
     #check: return reservations    
     elif command_args[0] == "check" and len(command_args) == 2:
         #check if vehicle type valid
@@ -55,7 +65,7 @@ def cache(command, message):
                         f.writelines(reservations)
             with open('reservations.txt', "ab") as f:
                 f.write(message)
-                
+        return time.time()        
     #reserve: create reservation
     elif command_args[0] == "reserve" and len(command_args) == 3:
         valid = True
@@ -78,7 +88,6 @@ def cache(command, message):
             with open('reservations.txt', "a") as f:
                 f.write(command_args[1] +" "+ command_args[2]+"\n")
             message = "Reservation added"
-        
     #delete: delete reservation
     elif command_args[0] == "delete" and len(command_args) == 3:
         #check reservation exists
@@ -98,8 +107,18 @@ def cache(command, message):
     #default for non-commands or non formatted commands  
     else:
         message = "Command not recognized"
+    return -1
 
-def get_cache(message):
+'''get info from the cache
+args:
+    message: current command
+    cache_time: time of last reservations.txt cache
+returns:
+    str representing the response to a command
+    or
+    False if cache is stale, invalid or unavailable
+'''
+def get_cache(message, cache_time):
     message_args = message.split(" ")
     
     message = ""
@@ -119,6 +138,8 @@ def get_cache(message):
     elif message_args[0] == "reservations" and len(message_args) == 1:
         if not exists("reservations.txt"):
             return False
+        if time.time() - cache_time > 60:
+            return False
         with open('reservations.txt') as f:
             message = f.read()
     #check: return reservations    
@@ -129,7 +150,7 @@ def get_cache(message):
             return False
         #check if vehicle type valid
         if not vehicleInFile(message_args[1], 'cars.txt'):
-            message = "Vehicle type not found."
+            return False
         else:
             #return reservations with no reservation found message
             with open('reservations.txt') as f:
@@ -137,57 +158,18 @@ def get_cache(message):
             for reservation in reservations:
                 if message_args[1] in reservation:
                     message = message + reservation
-                    
+            if time.time() - cache_time > 60:
+                return False
             if message == "":
                 message = "No reservations found for that vehicle type."
                 
     #reserve: create reservation
     elif message_args[0] == "reserve" and len(message_args) == 3:
-        valid = True
-        if not exists("cars.txt"):
-            return False
-        if not exists("dates.txt"):
-            return False
-        if not exists("reservations.txt"):
-            return False
-        #check if vehicle type valid
-        if not vehicleInFile(message_args[1], 'cars.txt'):
-            message = "Vehicle type not found."
-            valid = False
-        #check if date is valid
-        elif not dateInFile(message_args[2], 'dates.txt'):
-            message = "Date not found."
-            valid = False
-          
-        #check if vehicle is taken 
-        elif vehicleInFile(message_args[1], 'reservations.txt') and dateInFile(message_args[2], 'reservations.txt'):
-            message = "Vehicle not available at that time."
-            valid = False
-           
-        #save reservation and return confirmation message
-        if valid:   
-            with open('reservations.txt', "a") as f:
-                f.write(message_args[1] +" "+ message_args[2]+"\n")
-            message = "Reservation added"
+        return False
         
     #delete: delete reservation
     elif message_args[0] == "delete" and len(message_args) == 3:
-        if not exists("reservations.txt"):
-            return False
-        #check reservation exists
-        if vehicleInFile(message_args[1], 'reservations.txt') and dateInFile(message_args[2], 'reservations.txt'):
-            #delete reservation
-            with open('reservations.txt') as f:
-                reservations = f.readlines()
-            for i in range(len(reservations)):
-                if message_args[1] +" "+ message_args[2] in reservations[i]:
-                    del reservations[i]
-                    with open('reservations.txt', "w") as f:
-                        f.writelines(reservations) 
-                    message = "Reservation deleted"
-                    break
-        else:
-            message = "Reservation not found."
+        return False
     #default for non-commands or non formatted commands  
     else:
         message = "Command not recognized"
@@ -210,6 +192,7 @@ print("Enter 'quit' to exit the program.")
 #command loop
 previous_commands = 0
 previous_responses = []
+time_since_cache = 0
 while True:
     #command entered and sent to server without processing until quit entered
     user_input = input("Enter command: ")
@@ -218,7 +201,7 @@ while True:
         clientSocket.close()
         print("Socket closed")
         exit(0)
-    cache_response = get_cache(user_input)
+    cache_response = get_cache(user_input, time_since_cache)
     if cache_response == False:
         clientSocket.sendto(user_input.encode(),multicast_group)
         send_time = time.time()
@@ -235,7 +218,9 @@ while True:
                         print("ERROR: Duplicate received")
                 if not duplicate_found:
                     previous_responses.append((modifiedMessage, serverAddress))
-                    cache(user_input, modifiedMessage.decode())
+                    cache_time = cache(user_input, modifiedMessage.decode())
+                    if cache_time > 0:
+                        time_since_cache = cache_time
                     print ("(Server): ",modifiedMessage.decode())
             except timeout:
                 pass

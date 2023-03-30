@@ -134,14 +134,17 @@ def main():
     leader = False
     pid = os.getpid()
     print("Server ", str(pid), " started")
+    
+    #variables for tracking the election state
     last_leader_hb = 0
-    election_timeout = 3
     election_ongoing = False
     election_start = 0
     server_pids = []
     election_commands = ["e", "v", "hb"]
     election_init_pid = 0
     multicast_group = ip
+    leader_pid = None
+    
     group = inet_aton(multicast_group)
     mreq = struct.pack('4sL', group, INADDR_ANY)
     serverSocket.setsockopt(IPPROTO_IP, IP_ADD_MEMBERSHIP, mreq)
@@ -155,37 +158,52 @@ def main():
             f.write(message.decode()) 
     
     while True:
-        
+        #send heartbeat every second if leader
         if leader and time.time() -last_leader_hb > 1:
             serverSocket.sendto(("hb "+str(pid)).encode(), (multicast_group, port))
+            
+        #start election if no leader heartbeat in 3 seconds and election not ongoing
         if not leader and time.time() - last_leader_hb > 3 and not election_ongoing:
+            if leader_pid != None:
+                print("Heartbeat to group leader ",str(leader_pid)," failed")
             election_ongoing = True
             election_start = time.time()
             server_pids = []
             serverSocket.sendto(("e "+str(pid)).encode(), (multicast_group, port))
-        if election_ongoing and time.time() - election_start >2:
+            
+        #after 5 seconds of an election it ends, all servers should have all PIDs and highest will be leader
+        if election_ongoing and time.time() - election_start >5:
             election_ongoing = False
             leader_pid = max(server_pids)
             if leader_pid == pid:
                 leader = True
+            else:
+                leader = False
             print("Election completed. Group Leader: ", leader_pid)
         #message received and split into seperate arguments
         message, address = receive_message(serverSocket)
         if message != False:
+            #handle elections
             if len(message.decode().split(" ")) > 1:
                 if message.decode().split(" ")[1].isdigit() and message.decode().split(" ")[0] in election_commands:
+                    #if election command received then start receiving "votes" and send "vote" out
+                    # setup election state 
                     if message.decode().split(" ")[0] == "e":
                         election_init_pid =  int(message.decode().split(" ")[1])
                         server_pids.append(election_init_pid)
                         election_ongoing = True
+                        election_start = time.time()
                         server_pids = []
-                        print(str(pid), " calling election initiated by ", str(election_init_pid))
+                        print(str(pid), " is running an election initiated by ", str(election_init_pid))
                         serverSocket.sendto(("v "+str(pid)).encode(), (multicast_group, port))
+                    #receive election vote
                     elif message.decode().split(" ")[0] == "v":
                         if election_ongoing:
                             server_pids.append( int(message.decode().split(" ")[1]))
+                    #receive heartbeat
                     elif message.decode().split(" ")[0] == "hb":
                         last_leader_hb = time.time()
+            # leader sends normal server to client response
             else:
                 if leader:
                     _thread.start_new_thread(processRequest, (message, address, serverSocket))
